@@ -1367,8 +1367,11 @@ class Trainer(object):
             for items in loader:
                 if self.condition:
                     file_ = items["B_paths"][0] 
-                    file_name = file_.split('/')[-3]
+                    gt_path = Path(file_)
+                    file_name = gt_path.parents[1].name if len(gt_path.parents) > 1 else gt_path.parent.name
                 else:
+                    file_ = f'{i}.png'
+                    gt_path = Path(file_)
                     file_name = f'{i}.png'
 
                 i += 1
@@ -1444,7 +1447,7 @@ class Trainer(object):
                     nrow = all_images.shape[0]
                 save_path = str(self.results_folder / file_name)
                 os.makedirs(save_path, exist_ok=True)
-                full_path = os.path.join(save_path, file_.split('/')[-1]).replace('_fake_B','')
+                full_path = os.path.join(save_path, gt_path.name).replace('_fake_B','')
                 utils.save_image(all_images, full_path, nrow=nrow)
                 print("test-save "+full_path)
                 

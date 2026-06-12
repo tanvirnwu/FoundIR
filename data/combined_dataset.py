@@ -2,6 +2,7 @@ import os
 from os import path as osp
 from data.base_dataset import BaseDataset, get_params, get_transform
 from data.image_folder import make_dataset 
+from data.paired_image_paths import paired_paths_from_folders
 from PIL import Image
 from pathlib import Path
 import numpy as np
@@ -34,6 +35,26 @@ def paired_paths_from_meta_info_file(folders, keys, meta_info_file):
         p.append(dict([(f'{input_key}_path', lq_path), (f'{gt_key}_path', gt_path)]))
     return p
 
+
+def _meta_info_enabled(meta_info_file):
+    if meta_info_file is None:
+        return False
+    return str(meta_info_file).strip().lower() not in ('', 'none', 'null')
+
+
+def _folder_names_from_opt(opt, attr_name, defaults):
+    value = getattr(opt, attr_name, None)
+    if value is None:
+        return defaults
+    if isinstance(value, (list, tuple)):
+        names = tuple(str(item).strip() for item in value if str(item).strip())
+    else:
+        value = str(value).strip()
+        if value.lower() in ('', 'none', 'null'):
+            return defaults
+        names = tuple(item.strip() for item in value.split(',') if item.strip())
+    return names or defaults
+
 class CombinedDataset(BaseDataset):
     """A dataset class for paired image dataset.
 
@@ -56,19 +77,13 @@ class CombinedDataset(BaseDataset):
         self.opt = opt
         self.task = task
         #origin----------------------------------------------------------------------------------------------------------
-        if task == None:
-            self.dir_LQ = os.path.join(opt.dataroot, 'LQ')
-            self.dir_GT = os.path.join(opt.dataroot, 'GT')
-
-            self.A_paths = sorted(make_dataset(self.dir_LQ, opt.max_dataset_size))
-            self.B_paths = sorted(make_dataset(self.dir_GT, opt.max_dataset_size))
-
-        if task == 'meta_info' and opt.meta is not None:
+        meta_info_file = getattr(opt, 'meta', None)
+        if task == 'meta_info' and _meta_info_enabled(meta_info_file):
             self.dir_LQ = opt.dataroot
             self.dir_GT = opt.dataroot
 
             self.paths = paired_paths_from_meta_info_file(
-                [self.dir_LQ, self.dir_GT], ['adap', 'gt'], opt.meta)
+                [self.dir_LQ, self.dir_GT], ['adap', 'gt'], meta_info_file)
             
             self.A_paths = [path['adap_path'] for path in self.paths]
             self.B_paths = [path['gt_path'] for path in self.paths]
@@ -76,8 +91,24 @@ class CombinedDataset(BaseDataset):
             print(len(self.A_paths))
             self.B_size = len(self.B_paths)
             print(len(self.B_paths))
-
         else:
+            self.dir_LQ = os.path.join(opt.dataroot, 'LQ')
+            self.dir_GT = os.path.join(opt.dataroot, 'GT')
+
+            if os.path.isdir(self.dir_LQ) and os.path.isdir(self.dir_GT):
+                self.A_paths = sorted(make_dataset(self.dir_LQ, opt.max_dataset_size))
+                self.B_paths = sorted(make_dataset(self.dir_GT, opt.max_dataset_size))
+            else:
+                input_names = _folder_names_from_opt(opt, 'input_dir', ('input', 'LQ'))
+                gt_names = _folder_names_from_opt(opt, 'gt_dir', ('gt', 'GT'))
+                self.dir_LQ = opt.dataroot
+                self.dir_GT = opt.dataroot
+                self.paths = paired_paths_from_folders(
+                    opt.dataroot, input_names=input_names, gt_names=gt_names,
+                    max_dataset_size=opt.max_dataset_size, input_key='adap', gt_key='gt')
+                self.A_paths = [path['adap_path'] for path in self.paths]
+                self.B_paths = [path['gt_path'] for path in self.paths]
+
             self.A_size = len(self.A_paths)  # get the size of dataset A
             print(self.A_size)
             self.B_size = len(self.B_paths)  # get the size of dataset B
@@ -97,7 +128,7 @@ class CombinedDataset(BaseDataset):
             B_paths (str) - - image paths (same as A_paths)
         """
         # read a image given a random integer index
-        if self.task == 'meta_info' and self.opt.meta is not None:
+        if self.task == 'meta_info' and _meta_info_enabled(getattr(self.opt, 'meta', None)):
             paths = self.paths[index]
             A_path = paths['adap_path']
             B_path = paths['gt_path']

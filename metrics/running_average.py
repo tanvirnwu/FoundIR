@@ -1,12 +1,13 @@
 class MetricAccumulator:
-    def __init__(self):
+    def __init__(self, names=("psnr", "ssim")):
         self.count = 0
-        self._totals = {"psnr": 0.0, "ssim": 0.0}
+        self._names = tuple(names)
+        self._totals = {name: 0.0 for name in self._names}
 
-    def update(self, psnr, ssim):
+    def update(self, **metrics):
         self.count += 1
-        self._totals["psnr"] += float(psnr)
-        self._totals["ssim"] += float(ssim)
+        for name in self._names:
+            self._totals[name] += float(metrics[name])
 
     def averages(self):
         if self.count == 0:

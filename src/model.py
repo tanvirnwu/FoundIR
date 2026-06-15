@@ -32,6 +32,25 @@ ModelResPrediction = namedtuple(
 # helpers functions
 metric_module = importlib.import_module('metrics')
 
+def create_pyiqa_metrics(device):
+    try:
+        import pyiqa
+    except ImportError as exc:
+        print(f"LPIPS/FID unavailable: {exc}. Install pyiqa to enable them.")
+        return None, None
+
+    lpips_metric = None
+    fid_metric = None
+    try:
+        lpips_metric = pyiqa.create_metric('lpips', device=device)
+    except Exception as exc:
+        print(f"LPIPS unavailable: {exc}")
+    try:
+        fid_metric = pyiqa.create_metric('fid', device=device)
+    except Exception as exc:
+        print(f"FID unavailable: {exc}")
+    return lpips_metric, fid_metric
+
 def set_seed(SEED):
     # initialize random seed
     torch.manual_seed(SEED)
@@ -1348,7 +1367,10 @@ class Trainer(object):
                 batch_size=1)
             i = 0
             cnt = 0
-            metric_accumulator = MetricAccumulator()
+            lpips_metric, fid_metric = create_pyiqa_metrics(self.device)
+            metric_names = ("psnr", "ssim", "lpips") if lpips_metric is not None else ("psnr", "ssim")
+            metric_accumulator = MetricAccumulator(names=metric_names)
+            fid_folders = {}
             # opt_metric = {
             #     'psnr': {
             #         'type': 'calculate_psnr',
@@ -1457,6 +1479,7 @@ class Trainer(object):
                 print("test-save "+full_path)
 
                 if gt is not None:
+                    fid_folders.setdefault(save_path, set()).add(str(gt_path.parent))
                     try:
                         sr_img = tensor2img(all_images, rgb2bgr=True)
                         gt_img = tensor2img(gt, rgb2bgr=True)
@@ -1464,8 +1487,12 @@ class Trainer(object):
                             sr_img, gt_img, crop_border=0, test_y_channel=True)
                         ssim = metric_module.calculate_ssim(
                             sr_img, gt_img, crop_border=0, test_y_channel=True)
-                        metric_accumulator.update(psnr=psnr, ssim=ssim)
-                        print(f"metric {gt_path.name}: PSNR {psnr:.4f}, SSIM {ssim:.4f}")
+                        metrics = {"psnr": psnr, "ssim": ssim}
+                        if lpips_metric is not None:
+                            metrics["lpips"] = lpips_metric(all_images, gt).item()
+                        metric_accumulator.update(**metrics)
+                        metrics_text = ", ".join(f"{name.upper()} {value:.4f}" for name, value in metrics.items())
+                        print(f"metric {gt_path.name}: {metrics_text}")
                     except Exception as exc:
                         print(f"metric-skip {gt_path.name}: {exc}")
                 
@@ -1501,9 +1528,33 @@ class Trainer(object):
             if averages is not None:
                 print(f"Average PSNR: {averages['psnr']:.4f}")
                 print(f"Average SSIM: {averages['ssim']:.4f}")
+                if "lpips" in averages:
+                    print(f"Average LPIPS: {averages['lpips']:.4f}")
+                else:
+                    print("Average LPIPS: unavailable")
                 print(f"Evaluated images: {metric_accumulator.count}")
             else:
-                print("Average PSNR/SSIM: no valid GT pairs were evaluated")
+                print("Average PSNR/SSIM/LPIPS: no valid GT pairs were evaluated")
+
+            if fid_metric is not None and fid_folders:
+                fid_values = []
+                for restored_dir, gt_dirs in sorted(fid_folders.items()):
+                    if len(gt_dirs) != 1:
+                        print(f"FID-skip {restored_dir}: expected one GT folder, found {len(gt_dirs)}")
+                        continue
+                    gt_dir = next(iter(gt_dirs))
+                    try:
+                        fid_value = fid_metric(gt_dir, restored_dir).item()
+                        fid_values.append(fid_value)
+                        print(f"FID {Path(restored_dir).name}: {fid_value:.4f}")
+                    except Exception as exc:
+                        print(f"FID-skip {restored_dir}: {exc}")
+                if fid_values:
+                    print(f"Average FID: {sum(fid_values) / len(fid_values):.4f}")
+                else:
+                    print("Average FID: no valid folders were evaluated")
+            else:
+                print("Average FID: unavailable")
 
         print("test end")
 

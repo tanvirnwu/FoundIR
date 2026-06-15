@@ -25,6 +25,7 @@ from thop import profile
 from torchvision.utils import make_grid
 import importlib
 from PIL import Image
+from metrics.running_average import MetricAccumulator
 
 ModelResPrediction = namedtuple(
     'ModelResPrediction', ['pred_res', 'pred_noise', 'pred_x_start'])
@@ -1347,6 +1348,7 @@ class Trainer(object):
                 batch_size=1)
             i = 0
             cnt = 0
+            metric_accumulator = MetricAccumulator()
             # opt_metric = {
             #     'psnr': {
             #         'type': 'calculate_psnr',
@@ -1377,15 +1379,18 @@ class Trainer(object):
                 i += 1
                 
                 start_time = time.time()
-                
+                gt = None
+
                 # if crop_size is not None:
                 #     patches, positions = self.split_image(data["adap"], crop_size, crop_stride)
                 with torch.no_grad():
                     batches = self.num_samples
-                    
+
                     data = items
                     x_input_sample = data["adap"].to(self.device)
-                    _, _, h, w = x_input_sample.shape 
+                    if "gt" in data:
+                        gt = data["gt"].to(self.device)
+                    _, _, h, w = x_input_sample.shape
                     # gt = data["gt"].to(self.device)
                     # import pdb; pdb.set_trace()
                     if crop_phase == 'weight' and crop_size is not None:
@@ -1450,6 +1455,19 @@ class Trainer(object):
                 full_path = os.path.join(save_path, gt_path.name).replace('_fake_B','')
                 utils.save_image(all_images, full_path, nrow=nrow)
                 print("test-save "+full_path)
+
+                if gt is not None:
+                    try:
+                        sr_img = tensor2img(all_images, rgb2bgr=True)
+                        gt_img = tensor2img(gt, rgb2bgr=True)
+                        psnr = metric_module.calculate_psnr(
+                            sr_img, gt_img, crop_border=0, test_y_channel=True)
+                        ssim = metric_module.calculate_ssim(
+                            sr_img, gt_img, crop_border=0, test_y_channel=True)
+                        metric_accumulator.update(psnr=psnr, ssim=ssim)
+                        print(f"metric {gt_path.name}: PSNR {psnr:.4f}, SSIM {ssim:.4f}")
+                    except Exception as exc:
+                        print(f"metric-skip {gt_path.name}: {exc}")
                 
             #calculate the metric
             
@@ -1479,7 +1497,14 @@ class Trainer(object):
             #     current_metric[metric] = self.metric_results[metric]
             # print(current_metric['psnr'])
             # print(current_metric['ssim'])
-        
+            averages = metric_accumulator.averages()
+            if averages is not None:
+                print(f"Average PSNR: {averages['psnr']:.4f}")
+                print(f"Average SSIM: {averages['ssim']:.4f}")
+                print(f"Evaluated images: {metric_accumulator.count}")
+            else:
+                print("Average PSNR/SSIM: no valid GT pairs were evaluated")
+
         print("test end")
 
     def set_results_folder(self, path):

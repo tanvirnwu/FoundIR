@@ -57,6 +57,11 @@ def parse_args():
     parser.add_argument("--test_crop_phase", type=_optional_crop_phase, default="im2overlap")
     parser.add_argument("--test_crop_size", type=int, default=1024)
     parser.add_argument("--test_crop_stride", type=int, default=512)
+    parser.add_argument(
+        "--allow_missing_full_metrics",
+        action="store_true",
+        help="Continue with PSNR/SSIM-only testing if LPIPS/FID dependencies cannot initialize.",
+    )
     return parser.parse_args()
 
 
@@ -133,6 +138,7 @@ def main():
         crop_phase=opt.test_crop_phase,
         crop_size=opt.test_crop_size,
         crop_stride=opt.test_crop_stride,
+        require_full_metrics=not opt.allow_missing_full_metrics,
     )
 
 

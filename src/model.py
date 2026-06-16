@@ -32,24 +32,48 @@ ModelResPrediction = namedtuple(
 # helpers functions
 metric_module = importlib.import_module('metrics')
 
-def create_pyiqa_metrics(device):
+def create_pyiqa_metrics(device, require=False):
+    errors = []
     try:
         import pyiqa
     except ImportError as exc:
-        print(f"LPIPS/FID unavailable: {exc}. Install pyiqa to enable them.")
-        return None, None
+        errors.append(f"pyiqa import failed: {exc}")
+        if require:
+            raise RuntimeError(
+                "LPIPS/FID metrics require pyiqa. Install it with `pip install pyiqa` "
+                "inside the FoundIR environment."
+            ) from exc
+        print(f"LPIPS/FID unavailable: {errors[-1]}. Install pyiqa to enable them.")
+        return None, None, errors
 
     lpips_metric = None
     fid_metric = None
     try:
         lpips_metric = pyiqa.create_metric('lpips', device=device)
     except Exception as exc:
+        errors.append(f"LPIPS initialization failed: {exc}")
         print(f"LPIPS unavailable: {exc}")
     try:
         fid_metric = pyiqa.create_metric('fid', device=device)
     except Exception as exc:
+        errors.append(f"FID initialization failed: {exc}")
         print(f"FID unavailable: {exc}")
-    return lpips_metric, fid_metric
+
+    if require and (lpips_metric is None or fid_metric is None):
+        details = "\n".join(f"- {error}" for error in errors)
+        raise RuntimeError(
+            "Full metrics were requested, but LPIPS/FID could not be initialized.\n"
+            f"{details}\n"
+            "Fix the dependency/model-weight issue above, or pass --allow_missing_full_metrics "
+            "to run PSNR/SSIM-only testing."
+        )
+    return lpips_metric, fid_metric, errors
+
+
+def metric_unavailable_reason(errors):
+    if not errors:
+        return "not initialized"
+    return "; ".join(errors)
 
 def set_seed(SEED):
     # initialize random seed
@@ -1356,7 +1380,7 @@ class Trainer(object):
 
         accelerator.print('training complete')
     
-    def test(self, sample=False, last=True, FID=False, crop_phase=None, crop_size=None, crop_stride=None):
+    def test(self, sample=False, last=True, FID=False, crop_phase=None, crop_size=None, crop_stride=None, require_full_metrics=False):
         self.ema.ema_model.init()
         self.ema.to(self.device)
         print("test start")
@@ -1367,7 +1391,8 @@ class Trainer(object):
                 batch_size=1)
             i = 0
             cnt = 0
-            lpips_metric, fid_metric = create_pyiqa_metrics(self.device)
+            lpips_metric, fid_metric, full_metric_errors = create_pyiqa_metrics(
+                self.device, require=require_full_metrics)
             metric_names = ("psnr", "ssim", "lpips") if lpips_metric is not None else ("psnr", "ssim")
             metric_accumulator = MetricAccumulator(names=metric_names)
             fid_folders = {}
@@ -1531,7 +1556,7 @@ class Trainer(object):
                 if "lpips" in averages:
                     print(f"Average LPIPS: {averages['lpips']:.4f}")
                 else:
-                    print("Average LPIPS: unavailable")
+                    print(f"Average LPIPS: unavailable ({metric_unavailable_reason(full_metric_errors)})")
                 print(f"Evaluated images: {metric_accumulator.count}")
             else:
                 print("Average PSNR/SSIM/LPIPS: no valid GT pairs were evaluated")
@@ -1554,7 +1579,7 @@ class Trainer(object):
                 else:
                     print("Average FID: no valid folders were evaluated")
             else:
-                print("Average FID: unavailable")
+                print(f"Average FID: unavailable ({metric_unavailable_reason(full_metric_errors)})")
 
         print("test end")
 

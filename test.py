@@ -60,7 +60,7 @@ def parse_args():
     parser.add_argument(
         "--allow_missing_full_metrics",
         action="store_true",
-        help="Continue with PSNR/SSIM-only testing if LPIPS/FID dependencies cannot initialize.",
+        help="Continue with the metrics that can initialize if LPIPS/FID/BRISQUE/NIQE dependencies fail.",
     )
     return parser.parse_args()
 

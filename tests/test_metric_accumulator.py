@@ -13,16 +13,18 @@ def load_accumulator():
 
 class MetricAccumulatorTest(unittest.TestCase):
     def test_averages_metrics(self):
-        accumulator = load_accumulator()(names=("psnr", "ssim", "lpips"))
+        accumulator = load_accumulator()(names=("psnr", "ssim", "lpips", "brisque", "niqe"))
 
-        accumulator.update(psnr=20.0, ssim=0.80, lpips=0.20)
-        accumulator.update(psnr=30.0, ssim=0.90, lpips=0.10)
+        accumulator.update(psnr=20.0, ssim=0.80, lpips=0.20, brisque=15.0, niqe=4.0)
+        accumulator.update(psnr=30.0, ssim=0.90, lpips=0.10, brisque=25.0, niqe=6.0)
 
         self.assertEqual(accumulator.count, 2)
         averages = accumulator.averages()
         self.assertEqual(averages["psnr"], 25.0)
         self.assertAlmostEqual(averages["ssim"], 0.85)
         self.assertAlmostEqual(averages["lpips"], 0.15)
+        self.assertAlmostEqual(averages["brisque"], 20.0)
+        self.assertAlmostEqual(averages["niqe"], 5.0)
 
     def test_empty_average_is_none(self):
         accumulator = load_accumulator()()

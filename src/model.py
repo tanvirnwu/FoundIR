@@ -40,14 +40,15 @@ def create_pyiqa_metrics(device, require=False):
         errors.append(f"pyiqa import failed: {exc}")
         if require:
             raise RuntimeError(
-                "LPIPS/FID metrics require pyiqa. Install it with `pip install pyiqa` "
+                "Full test metrics require pyiqa. Install it with `pip install pyiqa` "
                 "inside the FoundIR environment."
             ) from exc
-        print(f"LPIPS/FID unavailable: {errors[-1]}. Install pyiqa to enable them.")
-        return None, None, errors
+        print(f"pyiqa metrics unavailable: {errors[-1]}. Install pyiqa to enable them.")
+        return None, {}, None, errors
 
     lpips_metric = None
     fid_metric = None
+    blind_metrics = {}
     try:
         lpips_metric = pyiqa.create_metric('lpips', device=device)
     except Exception as exc:
@@ -58,16 +59,26 @@ def create_pyiqa_metrics(device, require=False):
     except Exception as exc:
         errors.append(f"FID initialization failed: {exc}")
         print(f"FID unavailable: {exc}")
+    for metric_name in ("brisque", "niqe"):
+        try:
+            blind_metrics[metric_name] = pyiqa.create_metric(metric_name, device=device)
+        except Exception as exc:
+            errors.append(f"{metric_name.upper()} initialization failed: {exc}")
+            print(f"{metric_name.upper()} unavailable: {exc}")
 
-    if require and (lpips_metric is None or fid_metric is None):
+    if require and (
+        lpips_metric is None
+        or fid_metric is None
+        or any(metric_name not in blind_metrics for metric_name in ("brisque", "niqe"))
+    ):
         details = "\n".join(f"- {error}" for error in errors)
         raise RuntimeError(
-            "Full metrics were requested, but LPIPS/FID could not be initialized.\n"
+            "Full metrics were requested, but LPIPS/FID/BRISQUE/NIQE could not be initialized.\n"
             f"{details}\n"
             "Fix the dependency/model-weight issue above, or pass --allow_missing_full_metrics "
-            "to run PSNR/SSIM-only testing."
+            "to run with the metrics that can be initialized."
         )
-    return lpips_metric, fid_metric, errors
+    return lpips_metric, blind_metrics, fid_metric, errors
 
 
 def metric_unavailable_reason(errors):
@@ -1391,10 +1402,14 @@ class Trainer(object):
                 batch_size=1)
             i = 0
             cnt = 0
-            lpips_metric, fid_metric, full_metric_errors = create_pyiqa_metrics(
+            lpips_metric, blind_metrics, fid_metric, full_metric_errors = create_pyiqa_metrics(
                 self.device, require=require_full_metrics)
             metric_names = ("psnr", "ssim", "lpips") if lpips_metric is not None else ("psnr", "ssim")
             metric_accumulator = MetricAccumulator(names=metric_names)
+            blind_metric_accumulator = (
+                MetricAccumulator(names=tuple(blind_metrics.keys()))
+                if blind_metrics else None
+            )
             fid_folders = {}
             # opt_metric = {
             #     'psnr': {
@@ -1503,6 +1518,16 @@ class Trainer(object):
                 utils.save_image(all_images, full_path, nrow=nrow)
                 print("test-save "+full_path)
 
+                blind_metric_values = {}
+                if blind_metrics:
+                    try:
+                        for metric_name, metric in blind_metrics.items():
+                            blind_metric_values[metric_name] = metric(all_images).item()
+                        blind_metric_accumulator.update(**blind_metric_values)
+                    except Exception as exc:
+                        blind_metric_values = {}
+                        print(f"blind-metric-skip {gt_path.name}: {exc}")
+
                 if gt is not None:
                     fid_folders.setdefault(save_path, set()).add(str(gt_path.parent))
                     try:
@@ -1516,6 +1541,7 @@ class Trainer(object):
                         if lpips_metric is not None:
                             metrics["lpips"] = lpips_metric(all_images, gt).item()
                         metric_accumulator.update(**metrics)
+                        metrics.update(blind_metric_values)
                         metrics_text = ", ".join(f"{name.upper()} {value:.4f}" for name, value in metrics.items())
                         print(f"metric {gt_path.name}: {metrics_text}")
                     except Exception as exc:
@@ -1560,6 +1586,16 @@ class Trainer(object):
                 print(f"Evaluated images: {metric_accumulator.count}")
             else:
                 print("Average PSNR/SSIM/LPIPS: no valid GT pairs were evaluated")
+
+            blind_averages = (
+                blind_metric_accumulator.averages()
+                if blind_metric_accumulator is not None else None
+            )
+            for metric_name in ("brisque", "niqe"):
+                if blind_averages is not None and metric_name in blind_averages:
+                    print(f"Average {metric_name.upper()}: {blind_averages[metric_name]:.4f}")
+                else:
+                    print(f"Average {metric_name.upper()}: unavailable ({metric_unavailable_reason(full_metric_errors)})")
 
             if fid_metric is not None and fid_folders:
                 fid_values = []

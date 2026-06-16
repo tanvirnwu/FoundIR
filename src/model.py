@@ -31,6 +31,7 @@ ModelResPrediction = namedtuple(
     'ModelResPrediction', ['pred_res', 'pred_noise', 'pred_x_start'])
 # helpers functions
 metric_module = importlib.import_module('metrics')
+PYIQA_BLIND_METRIC_NAMES = ("brisque", "niqe", "piqe")
 
 def create_pyiqa_metrics(device, require=False):
     errors = []
@@ -59,7 +60,7 @@ def create_pyiqa_metrics(device, require=False):
     except Exception as exc:
         errors.append(f"FID initialization failed: {exc}")
         print(f"FID unavailable: {exc}")
-    for metric_name in ("brisque", "niqe"):
+    for metric_name in PYIQA_BLIND_METRIC_NAMES:
         try:
             blind_metrics[metric_name] = pyiqa.create_metric(metric_name, device=device)
         except Exception as exc:
@@ -69,11 +70,11 @@ def create_pyiqa_metrics(device, require=False):
     if require and (
         lpips_metric is None
         or fid_metric is None
-        or any(metric_name not in blind_metrics for metric_name in ("brisque", "niqe"))
+        or any(metric_name not in blind_metrics for metric_name in PYIQA_BLIND_METRIC_NAMES)
     ):
         details = "\n".join(f"- {error}" for error in errors)
         raise RuntimeError(
-            "Full metrics were requested, but LPIPS/FID/BRISQUE/NIQE could not be initialized.\n"
+            "Full metrics were requested, but LPIPS/FID/BRISQUE/NIQE/PIQE could not be initialized.\n"
             f"{details}\n"
             "Fix the dependency/model-weight issue above, or pass --allow_missing_full_metrics "
             "to run with the metrics that can be initialized."
@@ -1591,7 +1592,7 @@ class Trainer(object):
                 blind_metric_accumulator.averages()
                 if blind_metric_accumulator is not None else None
             )
-            for metric_name in ("brisque", "niqe"):
+            for metric_name in PYIQA_BLIND_METRIC_NAMES:
                 if blind_averages is not None and metric_name in blind_averages:
                     print(f"Average {metric_name.upper()}: {blind_averages[metric_name]:.4f}")
                 else:
